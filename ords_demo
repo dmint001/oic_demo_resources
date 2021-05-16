@@ -1,0 +1,154 @@
+/* Creating an user for ORDS operations , execute under DBA or sys user */
+CREATE USER APPSADMIN IDENTIFIED BY <PUT_PASSWORD>;
+GRANT CONNECT, RESOURCE TO APPSADMIN;
+GRANT CREATE SESSION TO APPSADMIN;
+GRANT UNLIMITED TABLESPACE TO APPSADMIN;
+GRANT CREATE TABLE,CREATE VIEW,CREATE SEQUENCE,CREATE PROCEDURE,CREATE TYPE,CREATE SYNONYM TO APPSADMIN;
+
+/* Creating Table for ORDS operations */
+CREATE TABLE employee_demo (
+emp_id number not NULL,
+emp_name varchar2(255)NOT NULL,
+emp_salary number NOT NULL,
+emp_department varchar2(255) NOT NULL,
+emp_role varchar2(50)NOT NULL,
+emp_dob date NOT NULL,
+PRIMARY KEY (emp_id)
+);
+
+/*Inserting Sample Data into the Table */
+insert into employee_demo values (000001, 'Jason Roy', 1000, 'Sales', 'Sales Head','01-MAR-87');
+insert into employee_demo values (000002, 'Nawaz Siddiqui', 2000, 'HR', 'HR Head','02-APR-81');
+insert into employee_demo values (000003, 'Abhishek Banerjee', 1500, 'Admin', 'Admin Head', '04-MAY-91');
+insert into employee_demo values (000004, 'Swastika Pal', 2500, 'IT', 'IT Head', '03-JUN-82');
+
+/*Execute below steps after you have enabled Enable :- ORDS_ADMINISTRATOR role or ORDS_RUNTIME_ROLE from OCI Console */
+
+/* Script to Enable ORDS om Schema*/
+
+BEGIN
+ORDS.enable_schema(
+p_enabled => TRUE,
+p_schema => 'APPSADMIN',
+p_url_mapping_type => 'BASE_PATH',
+p_url_mapping_pattern => 'app',
+p_auto_rest_auth => FALSE
+);
+dbms_output.put_line('Success: ORDS enabled on Schema');
+COMMIT;
+EXCEPTION
+WHEN OTHERS THEN
+dbms_output.put_line('Error Enabling ORDS on Schema : '||SQLERRM);
+ROLLBACK;
+END;
+
+/*Script to Enable ORDS on this table object */
+DECLARE
+PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+ORDS.ENABLE_OBJECT(p_enabled => TRUE,
+p_schema => 'APPSADMIN',
+p_object => 'EMPLOYEE_DEMO',
+p_object_type => 'TABLE',
+p_object_alias => 'EMPLOYEE_DEMO',
+p_auto_rest_auth => false);
+commit;
+END;
+
+/* Script to Create Privilege and Client Credentials */
+DECLARE
+    V_CLIENT_ID VARCHAR2(1000);
+    V_CLIENT_SECRET VARCHAR2(1000);
+    V_OAUTH_URL VARCHAR2(1000) := '<<Base URL>>/app/oauth/token';
+    V_ERROR_STATUS BOOLEAN := FALSE;
+BEGIN
+IF (NOT V_ERROR_STATUS)
+    THEN
+        DECLARE
+            l_priv_roles owa.vc_arr;
+            l_priv_patterns owa.vc_arr;
+        BEGIN
+            l_priv_roles(1) := 'oracle.dbtools.role.autorest.APPSADMIN';
+            l_priv_patterns(1) := '/*';
+          ords.define_privilege(
+                                p_privilege_name     => 'oracle.dbtools.autorest.privilege.APPSADMIN',
+                                p_roles              => l_priv_roles,
+                                p_patterns           => l_priv_patterns,
+                                p_label              => 'APPSADMIN Schema Access',
+                                p_description        => 'Provides the ability to create, ' || 
+                                                        'update and delete'
+                              ); 
+          dbms_output.put_line('Success: Privilege oracle.dbtools.autorest.privilege.APPSADMIN is updated');
+        EXCEPTION
+        WHEN OTHERS THEN
+            V_ERROR_STATUS := TRUE;
+            dbms_output.put_line('Error Updating Privilege : '||SQLERRM);
+        END;
+    END IF;
+    
+    IF (NOT V_ERROR_STATUS)
+    THEN
+        BEGIN
+          OAUTH.create_client(
+            p_name            => 'appsadmin_oauth_client',
+            p_grant_type      => 'client_credentials',
+            p_owner           => 'APPSADMIN', 				--Choose as per IT Standard
+            p_description     => 'A demo client', 	--Choose as per IT Standard
+            p_support_email   => 'xx@example.com',		--Choose as per IT Standard
+            p_privilege_names => 'oracle.dbtools.autorest.privilege.APPSADMIN'
+          );
+          dbms_output.put_line('Success: OAuth Client mvh_coa_oauth_client is created');
+        EXCEPTION
+        WHEN OTHERS THEN
+            V_ERROR_STATUS := TRUE;
+            dbms_output.put_line('Error Creating OAuth Client : '||SQLERRM);
+        END;
+    END IF;
+    
+    IF (NOT V_ERROR_STATUS)
+    THEN
+        BEGIN
+          OAUTH.grant_client_role(
+            p_client_name => 'appsadmin_oauth_client',
+            p_role_name   => 'oracle.dbtools.role.autorest.APPSADMIN'
+          );
+          dbms_output.put_line('Success: OAuth Grant Client Role.');
+        EXCEPTION
+        WHEN OTHERS THEN
+            V_ERROR_STATUS := TRUE;
+            dbms_output.put_line('Error Granting Client Role : '||SQLERRM);
+        END;
+    END IF;
+    
+    
+    IF V_ERROR_STATUS
+    THEN
+        ROLLBACK;
+    ELSE
+        COMMIT;
+        BEGIN
+            SELECT 
+                CLIENT_ID, 
+                CLIENT_SECRET
+            INTO
+                V_CLIENT_ID,
+                V_CLIENT_SECRET
+            FROM USER_ORDS_CLIENTS ;
+            dbms_output.put_line('====================OAuth Details===================');
+            dbms_output.put_line('CLIENT_ID:'||V_CLIENT_ID);
+            dbms_output.put_line('CLIENT_SECRET:'||V_CLIENT_SECRET);
+            dbms_output.put_line('OAUTH_URL:'||V_OAUTH_URL);
+        EXCEPTION
+        WHEN OTHERS THEN
+            dbms_output.put_line('Error while quering OAuth Details : '||SQLERRM);
+        END;
+    END IF;
+    
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        dbms_output.put_line('Error Main : '||SQLERRM);
+END;
+
+
